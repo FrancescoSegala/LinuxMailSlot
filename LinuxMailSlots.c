@@ -57,28 +57,40 @@ typedef struct Message{
   message* next;
 } message;
 
-//process list elem
+//process list elem, every list elem is a mail slot, it contains reference to 3 lists : message list, wait read process list,
+// wait write process list
 typedef struct List_Elem{
-  struct task_struct *task;	//puntatore al pcb del thread che ha insertito questo record nella WQ
   message* head;
   message* tail;
-  int pid;
-  int awake;
   list_elem* prev;
   list_elem* next;
+  /***********/
+  struct task_struct *task;	//puntatore al pcb del thread che ha insertito questo record nella WQ
+  int pid;
+  int awake; //flag che va ad indicare se la condizione di risveglio è verificata 0 o 1
+  int already_hit;
 }list_elem;
 
+elem head = {NULL,-1,-1,-1,NULL};  //esiste un head element per non gestire il caso di coda vuota
+elem *list = &head;
+spinlock_t queue_lock; //
+
+
+
 //list
-static list_elem* list[MAX_MINOR_NUM];
+static list_elem* mailslots[MAX_MINOR_NUM];
 
 //functions declaration
 static int lms_open(struct inode *inode , struct file *file);
 static int lms_release(struct inode *inode, struct file *file);
 static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t *off);
 static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off);
+static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigned long value);
 static ssize_t push_message(list_elem* elem, char* payload, ssize_t len);
 static ssize_t pop_message(list_elem elem, char* out_buff);
-static void memory_cleanup();
+
+
+
 
 static int lms_open(struct inode *inode, struct file *file){
 
@@ -138,7 +150,27 @@ static void pop_message(list_elem elem, char* out_buff){
   kfree(head_aux);
 }
 
+static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t *off){
 
+}
+
+static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off){
+
+}
+
+
+
+
+
+
+static struct file_operations fops = {
+  .owner= THIS_MODULE,
+  .open =  lms_open,
+  .write = lms_write,
+  .read = lms_read,
+  .unlocked_ioctl= lms_ioctl,
+  .release= lms_release
+};
 
 int init_module(void) {}
 
