@@ -40,17 +40,19 @@ the range of device file minor numbers supported by the driver (it could be the 
 #define MAX_MINOR_NUM 255
 #define MAX_MESSAGE_SIZE 512
 #define MESSAGE_SIZE 256
-#define SUCCESS 0
-#define FAILURE -1
 #define NO 0
 #define YES 1
+#define NON_BLOCKING 0
+#define BLOCKING 1
 
 //mudule error codes
+#define SUCCESS 0
+#define FAILURE -1
 #define MSOPEN_ERROR -1
 #define MSWRITE_ERROR -2
 #define MSREAD_ERROR -3
 #define MSPUSH_ERROR -4
-
+#define NOT_ENOUGH_SPACE_ERROR -5
 
 //message
 typedef struct Message{
@@ -69,17 +71,23 @@ typedef struct List_Elem{
   int already_hit;
 }list_elem;
 
+
+//wrapper for list elem coolections
+typedef struct List{
+  list_elem* head;
+  list_elem* queue;
+}list;
+
+
 typedef struct Slot_elem{
-  list_elem* w_queue;
-  list_elem* r_queue;
+  list* w_queue;
+  list* r_queue;
   message* head;
   message* tail;
   int free_mem;
   spinlock_t queue_lock;
   int blocking;
 } slot_elem;
-
-
 
 
 //list
@@ -171,59 +179,61 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
 	me.already_hit = NO;
 
   //lock the mailslot elem
-  spin_lock(mailslots[MINOR_CURRENT]->queue_lock);
+  spin_lock( &(mailslots[MINOR_CURRENT]->queue_lock) );
 
   while( mailslots[MINOR_CURRENT]->free_mem < len ){
     //not enough free space
+    //if in blocking mode then wait else exit
 
-    //if in blocking mode --> wait
-    //else exit
-    /*
-    if(blk_mode[calling_device]==NON_BLOCKING_MODE){
-        spin_unlock(&lock[calling_device]);
-        kfree(tmp);
-        kfree(new->payload);
-        kfree(new);
-        return -EAGAIN;
+    if ( mailslots[MINOR_CURRENT]->blocking == NON_BLOCKING ){
+      spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+      return NOT_ENOUGH_SPACE_ERROR;
     }
-    */
+
     aux = mailslots[MINOR_CURRENT]->w_queue->tail;
     /*check on the regularity of the queue*/
-    /*
+
     if(aux->prev == NULL){
-        spin_unlock(&lock[calling_device]);
+        spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
         printk("%s: malformed sleep-list - service damaged\n",MODNAME);
-        kfree(tmp);
-        kfree(new->payload);
-        kfree(new);
-        return -1;
+        return FAILURE;
     }
-    */
 
-    //then the process put himself in the tail of the writing queue
-    aux->prev->next = &me;
-    me.prev = aux->prev;
-    aux->prev = &me;
-    me.next = aux;
+    if (aux == NULL ){
+      //empty queue but cannot write? error somewhere
+      spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+      printk("%s: lms_write error! writing queue empty but cannot write\n",MODNAME);
+      return FAILURE;
+    }
 
-    spin_unlock(mailslots[MINOR_CURRENT]->queue_lock );
+    //then the process put himself in the tail of the writing queue and we save a pointer to our position
+    //remember : AUX is the tail
+    aux->next = &me;
+    me.prev = aux;
+    me.next = NULL ;
+    mailslots[MINOR_CURRENT]->w_queue->tail = &me;
+
+    //release the lock and wait for the event
+    spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock)  );
 
     int ret = wait_event_interruptible(the_queue, mailslots[MINOR_CURRENT]->free_mem >= len);
-    /*insert return code checl*/
+    /*TODO insert return code check*/
 
-    //now the writer has to delete himself from the queue
-    spin_lock(mailslots[MINOR_CURRENT]->queue_lock );
+    //now the writer has to delete himself from the w_queue
+    spin_lock( &(mailslots[MINOR_CURRENT]->queue_lock)  );
 
     me->prev->next = me->next;
     me->next->prev = me->prev;
-
+    //done
   }
+
+  //once you know you can write your message because there is enough space
   //push the message to the message queue and decrease the slot capacity
   push_message(mailslots[MINOR_CURRENT], buff , len);
   mailslots[MINOR_CURRENT]->free_mem -= len;
+
   //awake a reader process that is waiting
-  aux = mailslots[MINOR_CURRENT]->r_queue;
-  //check on validity if the queue :::::::::
+  aux = mailslots[MINOR_CURRENT]->r_queue->head;
   while ( aux->next != NULL ){
     if ( aux->already_hit == NO ){
       aux->already_hit = YES ;
@@ -233,19 +243,28 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
     }
     aux= aux->next;
   }
-  spin_unlock(mailslots[MINOR_CURRENT]->queue_lock);
+  //then release the lock and return the number of byte written
+  spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
   return len;
 }
+
+/*
+
+  babe I want my space
+
+
+*/
 
 static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off){
 
 }
+/*
 
 
 
 
 
-
+*/
 static struct file_operations fops = {
   .owner= THIS_MODULE,
   .open =  lms_open,
