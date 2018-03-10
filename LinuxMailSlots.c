@@ -42,6 +42,8 @@ the range of device file minor numbers supported by the driver (it could be the 
 #define MESSAGE_SIZE 256
 #define SUCCESS 0
 #define FAILURE -1
+#define NO 0
+#define YES 1
 
 //mudule error codes
 #define MSOPEN_ERROR -1
@@ -60,20 +62,23 @@ typedef struct Message{
 //process list elem, every list elem is a mail slot, it contains reference to 3 lists : message list, wait read process list,
 // wait write process list
 typedef struct List_Elem{
-  message* head;
-  message* tail;
   list_elem* prev;
   list_elem* next;
-  /***********/
   struct task_struct *task;	//puntatore al pcb del thread che ha insertito questo record nella WQ
-  int pid;
   int awake; //flag che va ad indicare se la condizione di risveglio è verificata 0 o 1
   int already_hit;
 }list_elem;
 
-elem head = {NULL,-1,-1,-1,NULL};  //esiste un head element per non gestire il caso di coda vuota
-elem *list = &head;
-spinlock_t queue_lock; //
+typedef struct Slot_elem{
+  list_elem* w_queue;
+  list_elem* r_queue;
+  message* head;
+  message* tail;
+  int free_mem;
+  spinlock_t queue_lock;
+  int blocking;
+} slot_elem;
+
 
 
 
@@ -86,8 +91,8 @@ static int lms_release(struct inode *inode, struct file *file);
 static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t *off);
 static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off);
 static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigned long value);
-static ssize_t push_message(list_elem* elem, char* payload, ssize_t len);
-static ssize_t pop_message(list_elem elem, char* out_buff);
+static ssize_t push_message(slot_elem* elem, char* payload, ssize_t len);
+static ssize_t pop_message(slot_elem* elem, char* out_buff);
 
 
 
@@ -110,7 +115,9 @@ static int lms_release(struct inode *inode, struct file *file){
   return 0;
 }
 
-static ssize_t push_message(list_elem* elem, char* payload, ssize_t len){
+
+
+static ssize_t push_message(slot_elem* elem, char* payload, ssize_t len){
 
   struct message* pushed_msg = kmalloc(sizeof(struct message), GFP_KERNEL);//memory allocation
 
@@ -130,19 +137,21 @@ static ssize_t push_message(list_elem* elem, char* payload, ssize_t len){
   pushed_msg->next = NULL;    //completing the message data structure
   //and updating it
   if( elem->head == NULL ) {
-    //empty queue
+    //empty message queue
     elem->head = pushed_msg;
     elem->tail = pushed_msg;
   }
   else {
-    //push the message to the tail of the queue
+    //push the message to the tail of the message queue
     elem->tail->next = pushed_msg;
     elem->tail = pushed_msg;
   }
   return SUCCESS;
 }
 
-static void pop_message(list_elem elem, char* out_buff){
+
+
+static void pop_message(slot_elem* elem, char* out_buff){
   copy_to_user(out_buff, elem->head->message->payload, elem->head->message->len); //put the message into the buffer (to,from.len)
   message* head_aux = elem->head;
   elem->head = elem->head->next; //pop the readed message
@@ -152,6 +161,80 @@ static void pop_message(list_elem elem, char* out_buff){
 
 static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t *off){
 
+  volatile list_elem me;
+  list_elem *aux;
+  DECLARE_WAIT_QUEUE_HEAD(the_queue);//here we use a private queue - wakeup is selective via wake_up_process
+  me.next = NULL;
+  me.prev = NULL;
+  me.task = current;
+	me.awake = NO;
+	me.already_hit = NO;
+
+  //lock the mailslot elem
+  spin_lock(mailslots[MINOR_CURRENT]->queue_lock);
+
+  while( mailslots[MINOR_CURRENT]->free_mem < len ){
+    //not enough free space
+
+    //if in blocking mode --> wait
+    //else exit
+    /*
+    if(blk_mode[calling_device]==NON_BLOCKING_MODE){
+        spin_unlock(&lock[calling_device]);
+        kfree(tmp);
+        kfree(new->payload);
+        kfree(new);
+        return -EAGAIN;
+    }
+    */
+    aux = mailslots[MINOR_CURRENT]->w_queue->tail;
+    /*check on the regularity of the queue*/
+    /*
+    if(aux->prev == NULL){
+        spin_unlock(&lock[calling_device]);
+        printk("%s: malformed sleep-list - service damaged\n",MODNAME);
+        kfree(tmp);
+        kfree(new->payload);
+        kfree(new);
+        return -1;
+    }
+    */
+
+    //then the process put himself in the tail of the writing queue
+    aux->prev->next = &me;
+    me.prev = aux->prev;
+    aux->prev = &me;
+    me.next = aux;
+
+    spin_unlock(mailslots[MINOR_CURRENT]->queue_lock );
+
+    int ret = wait_event_interruptible(the_queue, mailslots[MINOR_CURRENT]->free_mem >= len);
+    /*insert return code checl*/
+
+    //now the writer has to delete himself from the queue
+    spin_lock(mailslots[MINOR_CURRENT]->queue_lock );
+
+    me->prev->next = me->next;
+    me->next->prev = me->prev;
+
+  }
+  //push the message to the message queue and decrease the slot capacity
+  push_message(mailslots[MINOR_CURRENT], buff , len);
+  mailslots[MINOR_CURRENT]->free_mem -= len;
+  //awake a reader process that is waiting
+  aux = mailslots[MINOR_CURRENT]->r_queue;
+  //check on validity if the queue :::::::::
+  while ( aux->next != NULL ){
+    if ( aux->already_hit == NO ){
+      aux->already_hit = YES ;
+      aux->awake = YES ;
+      wake_up_process(aux->task);
+      break;
+    }
+    aux= aux->next;
+  }
+  spin_unlock(mailslots[MINOR_CURRENT]->queue_lock);
+  return len;
 }
 
 static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off){
