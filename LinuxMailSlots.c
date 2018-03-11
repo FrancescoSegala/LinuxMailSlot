@@ -249,9 +249,9 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
   return len;
 }
 
+
 /*
 
-  babe I want my space
 
 
 */
@@ -267,14 +267,27 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
 	me.awake = NO;
 	me.already_hit = NO;
 
-  //TODO check on len : has to be equal to the size of the slot message
+  //check on len : has to be equal to the size of the message
+  if ( len <= 0  ){
+    printk("%s: called a read with negative buffer len \n",MODNAME);
+    return FAILURE;
+  }
+  else if ( len < mailslots[MINOR_CURRENT]->head->size  ){
+    printk( "%s: called a read with a len not compliant with the message size, the read hs to be all or nothing ", MODNAME );
+    return FAILURE;
+  }
+  else {
+    len = mailslots[MINOR_CURRENT]->head->size;
+  }
 
   spin_lock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+  //acquire the lock in order to read the message slot
 
   while( mailslots[MINOR_CURRENT]->head == NULL ){
     //no messages to read!
     if ( mailslots[MINOR_CURRENT]->blocking == NON_BLOCKING_MODE ){
       //quit
+      printk("%s: No messages to read in this mailslot, exiting...\n",MODNAME);
       spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
       return FAILURE;
     }
@@ -295,7 +308,11 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
     spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
     int ret = wait_event_interruptible(the_queue, mailslots[MINOR_CURRENT]->head != NULL );
 
-    //TODO check on ret
+    if ( ret != 0 ){
+      /*the function will return -ERESTARTSYS if it was interrupted by a signal and 0 if condition evaluated to true.*/
+      printk("%s: The process %d has been awaken by a signal\n", MODNAME , current->pid);
+      return FAILURE;  
+    }
 
     //once waked up the reader delete himself from the waitqueue , then the loop is over
     //and the process can pop a message from the queue in CS
@@ -303,10 +320,11 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
     me.prev->next = me.next;
     me.next->prev = me.prev;
   }
+
   //poping the message from the mailslot
   pop_message(mailslots[MINOR_CURRENT], buff);
   //now the reader has to signal to the writers waiting that there is a new slot ready
-  //then is his duty to remove himself from the queue 
+  //then is his duty to remove himself from the w_queue
   aux = mailslots[MINOR_CURRENT]->w_list->head;
   while ( aux != NULL ){
     if ( aux->already_hit == NO ){
