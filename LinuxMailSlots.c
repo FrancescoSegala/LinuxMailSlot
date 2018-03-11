@@ -160,9 +160,10 @@ static ssize_t push_message(slot_elem* elem, char* payload, ssize_t len){
 
 
 static void pop_message(slot_elem* elem, char* out_buff){
-  copy_to_user(out_buff, elem->head->message->payload, elem->head->message->len); //put the message into the buffer (to,from.len)
+  copy_to_user(out_buff, elem->head->payload, elem->head->size); //put the message into the buffer (to,from.len)
   message* head_aux = elem->head;
   elem->head = elem->head->next; //pop the readed message
+  elem->free_mem += head_aux->size; //update the free memory of the slot
   kfree(head_aux->payload); //release the message head memory
   kfree(head_aux);
 }
@@ -257,7 +258,69 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
 
 static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off){
 
+  volatile list_elem me;
+  list_elem *aux;
+  DECLARE_WAIT_QUEUE_HEAD(the_queue);//here we use a private queue - wakeup is selective via wake_up_process
+  me.next = NULL;
+  me.prev = NULL;
+  me.task = current;
+	me.awake = NO;
+	me.already_hit = NO;
+
+  //TODO check on len : has to be equal to the size of the slot message
+
+  spin_lock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+
+  while( mailslots[MINOR_CURRENT]->head == NULL ){
+    //no messages to read!
+    if ( mailslots[MINOR_CURRENT]->blocking == NON_BLOCKING_MODE ){
+      //quit
+      spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+      return FAILURE;
+    }
+    //the reader process has to put himself in the reader queue
+    aux = mailslots[MINOR_CURRENT]->r_queue->head;
+    // if the queue is empty initialize a new queue : head and tail
+    if ( aux == NULL ){
+        mailslots[MINOR_CURRENT]->r_queue->head = &me;
+        mailslots[MINOR_CURRENT]->r_queue->tail = &me;
+    }
+    else {
+      aux = mailslots[MINOR_CURRENT]->r_queue->tail;
+      //otherwise put it on the tail and update
+      aux->next = &me ;
+      (&me)->prev = aux ;
+      mailslots[MINOR_CURRENT]->r_queue->tail = mailslots[MINOR_CURRENT]->r_queue->tail->next;
+    }
+    spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+    int ret = wait_event_interruptible(the_queue, mailslots[MINOR_CURRENT]->head != NULL );
+
+    //TODO check on ret
+
+    //once waked up the reader delete himself from the waitqueue , then the loop is over
+    //and the process can pop a message from the queue in CS
+    spin_lock( &(mailslots[MINOR_CURRENT])->queue_lock );
+    me.prev->next = me.next;
+    me.next->prev = me.prev;
+  }
+  //poping the message from the mailslot
+  pop_message(mailslots[MINOR_CURRENT], buff);
+  //now the reader has to signal to the writers waiting that there is a new slot ready
+  //then is his duty to remove himself from the queue 
+  aux = mailslots[MINOR_CURRENT]->w_list->head;
+  while ( aux != NULL ){
+    if ( aux->already_hit == NO ){
+      aux->awake = YES;
+      aux->already_hit = NO;
+      wake_up_process(aux->task);
+      break;
+    }
+    aux = aux->next;
+  }
+  spin_unlock( &(mailslots[MINOR_CURRENT])->queue_lock );
+  return len;
 }
+
 /*
 
 
