@@ -213,9 +213,9 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
         return FAILURE;
     }
 
-    if (aux == NULL ){
-        mailslots[MINOR_CURRENT]->w_queue->head = mailslots[MINOR_CURRENT]->w_queue->tail = &me;
-        me.prev = NULL;
+    if (mailslots[MINOR_CURRENT]->w_queue->head == NULL ){
+        mailslots[MINOR_CURRENT]->w_queue->head = &me;
+        mailslots[MINOR_CURRENT]->w_queue->tail = &me;
     }
     else {
       //then the process put himself in the tail of the writing queue and we save a pointer to our position
@@ -317,6 +317,11 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
     else {
       aux = mailslots[MINOR_CURRENT]->r_queue->tail;
       //otherwise put it on the tail and update
+      if ( aux->prev == NULL ){
+        spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+        printk("%s: malformed read queue, aborted", MODNAME);
+        return FAILURE;
+      }
       aux->next = &me ;
       (&me)->prev = aux ;
       mailslots[MINOR_CURRENT]->r_queue->tail = mailslots[MINOR_CURRENT]->r_queue->tail->next;
@@ -337,6 +342,15 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
     me.next->prev = me.prev;
   }
 
+  //check again the len to read after the lock releasing because can be changed
+  if ( len < mailslots[MINOR_CURRENT]->head->size  ){
+    spin_unlock( &(mailslots[MINOR_CURRENT])->queue_lock );
+    printk( "%s: called a read with a len not compliant with the message size, the read hs to be all or nothing ", MODNAME );
+    return FAILURE;
+  }
+  else {
+    len = mailslots[MINOR_CURRENT]->head->size;
+  }
   //poping the message from the mailslot
   pop_message(mailslots[MINOR_CURRENT], buff);
   //now the reader has to signal to the writers waiting that there is a new slot ready
@@ -358,8 +372,9 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
 
 
 static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigned long value){
-  //since this function has not to be queued we try to get the lock
+  //since this function has not to be queued we try to get the lock and if is busy we quit otherwise we lock the mailslot
   int status = SUCCESS ;
+  //TODO need a description
   if ( spin_trylock( &(mailslots[MINOR_CURRENT]->queue_lock) )  == 0 ){
     if ( mailslots[MINOR_CURRENT]->blocking == NON_BLOCKING ){
       printk("%s: trying to acquire a lock in a mailslot already locked. Error.",MODNAME);
@@ -445,8 +460,8 @@ void cleanup_module(void){
   		printk( "%s: No device registered!\n", MODNAME);
   		return FAILURE;
   }
-  int i = 0;
-  for (i=0 ; i < MAX_MINOR_NUM ; i++){
+  int i;
+  for (i = 0 ; i < MAX_MINOR_NUM ; i++){
     message* iterate = mailslots[i]->head;
     message* aux;
     while( iterate != NULL ){
