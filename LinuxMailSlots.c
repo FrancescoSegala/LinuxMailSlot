@@ -40,6 +40,7 @@ the range of device file minor numbers supported by the driver (it could be the 
 #define MAX_MINOR_NUM 255
 #define MAX_MESSAGE_SIZE 512
 #define INIT_MESSAGE_SIZE 256
+#define MAX_SLOT_SIZE 128
 #define NO 0
 #define YES 1
 #define NON_BLOCKING 0
@@ -55,8 +56,9 @@ the range of device file minor numbers supported by the driver (it could be the 
 #define NOT_ENOUGH_SPACE_ERROR -5
 
 //IOCTL param
-#define CHANGE_MESSAGE_SIZE 10
-#define CHANGE_BLOCKING_MODE 11
+#define CHANGE_MESSAGE_SIZE 100
+#define CHANGE_BLOCKING_MODE 110
+#define GET_SLOT_SIZE 111
 
 
 //message
@@ -66,24 +68,24 @@ typedef struct Message{
   message* next;
 } message;
 
-//process list elem, every list elem is a mail slot, it contains reference to 3 lists : message list, wait read process list,
-// wait write process list
+
+//list elem , this entry of the list represent a process waiting on that WQ
 typedef struct List_Elem{
   list_elem* prev;
   list_elem* next;
-  struct task_struct *task;	//puntatore al pcb del thread che ha insertito questo record nella WQ
-  int awake; //flag che va ad indicare se la condizione di risveglio è verificata 0 o 1
+  struct task_struct *task;	//pointer to the thread PCB that inserted this process in the WQ
+  int awake;
   int already_hit;
 }list_elem;
 
 
-//wrapper for list elem coolections
+//wrapper for list elem collections
 typedef struct List{
   list_elem* head;
   list_elem* queue;
 }list;
 
-
+//mailslot element
 typedef struct Slot_elem{
   list* w_queue;
   list* r_queue;
@@ -95,9 +97,11 @@ typedef struct Slot_elem{
   ssize_t curr_size;
 } slot_elem;
 
+//
+static int major_number = 0;
 
-//list
-static list_elem* mailslots[MAX_MINOR_NUM];
+//the mailslots list
+static slot_elem* mailslots[MAX_MINOR_NUM];
 
 //functions declaration
 static int lms_open(struct inode *inode , struct file *file);
@@ -122,6 +126,8 @@ static int lms_open(struct inode *inode, struct file *file){
   try_module_get(THIS_MODULE);
   return 0;
 }
+
+
 
 static int lms_release(struct inode *inode, struct file *file){
   printk("Device closing...closed a LMS instance with minor %d",MINOR_CURRENT);
@@ -164,10 +170,11 @@ static void pop_message(slot_elem* elem, char* out_buff){
   copy_to_user(out_buff, elem->head->payload, elem->head->size); //put the message into the buffer (to,from.len)
   message* head_aux = elem->head;
   elem->head = elem->head->next; //pop the readed message
-  elem->free_mem += head_aux->size; //update the free memory of the slot
   kfree(head_aux->payload); //release the message head memory
   kfree(head_aux);
 }
+
+
 
 static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t *off){
 
@@ -202,29 +209,32 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
 
     if(aux->prev == NULL){
         spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
-        printk("%s: malformed sleep-list - service damaged\n",MODNAME);
+        printk("%s: malformed list error in the mailslot\n",MODNAME);
         return FAILURE;
     }
 
     if (aux == NULL ){
-      //empty queue but cannot write? error somewhere
-      spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
-      printk("%s: lms_write error! writing queue empty but cannot write\n",MODNAME);
-      return FAILURE;
+        mailslots[MINOR_CURRENT]->w_queue->head = mailslots[MINOR_CURRENT]->w_queue->tail = &me;
+        me.prev = NULL;
     }
-
-    //then the process put himself in the tail of the writing queue and we save a pointer to our position
-    //remember : AUX is the tail
-    aux->next = &me;
-    me.prev = aux;
-    me.next = NULL ;
-    mailslots[MINOR_CURRENT]->w_queue->tail = &me;
+    else {
+      //then the process put himself in the tail of the writing queue and we save a pointer to our position
+      //remember : AUX is the tail
+      aux->next = &me;
+      me.prev = aux;
+      me.next = NULL ;
+      mailslots[MINOR_CURRENT]->w_queue->tail = &me;
+    }
 
     //release the lock and wait for the event
     spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock)  );
 
     int ret = wait_event_interruptible(the_queue, mailslots[MINOR_CURRENT]->free_mem >= len);
-    /*TODO insert return code check*/
+    if ( ret != 0 ){
+      /*the function will return -ERESTARTSYS if it was interrupted by a signal and 0 if condition evaluated to true.*/
+      printk("%s: The process %d has been awaken by a signal\n", MODNAME , current->pid);
+      return FAILURE;
+    }
 
     //now the writer has to delete himself from the w_queue
     spin_lock( &(mailslots[MINOR_CURRENT]->queue_lock)  );
@@ -236,6 +246,11 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
 
   //once you know you can write your message because there is enough space
   //push the message to the message queue and decrease the slot capacity
+  //but before check is the len policy is has changed by IOCTL
+  if ( len > mailslots[MINOR_CURRENT]->curr_size  || len <= 0 ){
+    printk("%s: lms_write error, len to write not compliant with the spec. \n " , MODNAME);
+    return FAILURE;
+  }
   push_message(mailslots[MINOR_CURRENT], buff , len);
   mailslots[MINOR_CURRENT]->free_mem -= len;
 
@@ -256,11 +271,6 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
 }
 
 
-/*
-
-
-
-*/
 
 static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off){
 
@@ -345,13 +355,8 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
   return len;
 }
 
-/*
 
 
-
-
-
-*/
 static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigned long value){
   //since this function has not to be queued we try to get the lock
   int status = SUCCESS ;
@@ -400,10 +405,7 @@ static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigne
   return status;
 }
 
-/*
 
-
-*/
 
 static struct file_operations fops = {
   .owner= THIS_MODULE,
@@ -414,6 +416,48 @@ static struct file_operations fops = {
   .release= lms_release
 };
 
-int init_module(void) {}
+int init_module(void) {
+  //register the chardevice and store the result in major_number
+  major_number = register_chrdev(0, DEVICE_NAME, &fops);
+  if ( major_number < 0 ){
+    printk("%s: cannot register a chardevice , failed ", MODNAME);
+    return major_number;
+  }
+  //then initialize the all data structures
+  int i ;
+  for (i = 0 ; i < MAX_MINOR_NUM ; i++){
+    mailslots[i]->w_queue = {NULL,NULL};
+    mailslots[i]->r_queue = {NULL,NULL};
+    mailslots[i]->head = NULL;
+    mailslots[i]->tail = NULL;
+    mailslots[i]->free_mem = INIT_MESSAGE_SIZE*MAX_SLOT_SIZE; //so there are at most MAX_SLOT_SIZE slot for each specific mailslot
+    mailslots[i]->curr_size = INIT_MESSAGE_SIZE;
+    mailslots[i]->blocking = BLOCKING_MODE;
+    spin_lock_init( &(mailslots[i]->queue_lock) );
+  }
+  printk( "%s: Device registered, it is assigned major number %d\n", MODNAME, major_number);
+	return SUCCESS;
+}
 
-void cleanup_module(void){}
+void cleanup_module(void){
+
+  if ( major_number <= 0 ){
+  		printk( "%s: No device registered!\n", MODNAME);
+  		return FAILURE;
+  }
+  int i = 0;
+  for (i=0 ; i < MAX_MINOR_NUM ; i++){
+    message* iterate = mailslots[i]->head;
+    message* aux;
+    while( iterate != NULL ){
+      aux = iterate;
+      iterate = iterate->next;
+      kfree(aux->payload);
+      kfree(aux);
+    }
+  }
+
+  unregister_chrdev(Major, DEVICE_NAME);
+  printk( "%s:Device unregistered!\n", MODNAME);
+  return;
+}
