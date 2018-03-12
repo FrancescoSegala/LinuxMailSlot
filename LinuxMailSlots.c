@@ -39,7 +39,7 @@ the range of device file minor numbers supported by the driver (it could be the 
 #define MINOR_CURRENT MINOR(filp->f_dentry->d_inode->i_rdev);
 #define MAX_MINOR_NUM 255
 #define MAX_MESSAGE_SIZE 512
-#define MESSAGE_SIZE 256
+#define INIT_MESSAGE_SIZE 256
 #define NO 0
 #define YES 1
 #define NON_BLOCKING 0
@@ -53,6 +53,11 @@ the range of device file minor numbers supported by the driver (it could be the 
 #define MSREAD_ERROR -3
 #define MSPUSH_ERROR -4
 #define NOT_ENOUGH_SPACE_ERROR -5
+
+//IOCTL param
+#define CHANGE_MESSAGE_SIZE 10
+#define CHANGE_BLOCKING_MODE 11
+
 
 //message
 typedef struct Message{
@@ -87,6 +92,7 @@ typedef struct Slot_elem{
   int free_mem;
   spinlock_t queue_lock;
   int blocking;
+  ssize_t curr_size;
 } slot_elem;
 
 
@@ -134,11 +140,6 @@ static ssize_t push_message(slot_elem* elem, char* payload, ssize_t len){
     return MSPUSH_ERROR;
   }
 
-  if (sizeof(payload) > MAX_MESSAGE_SIZE ){ //max message size check
-    printk("Error, payload message exceed maximum message size");
-    return MSPUSH_ERROR;
-  }
-
   memset(pushed_msg->payload, 0, len );   //cleaning memory before using
   copy_from_user(pushed_msg->payload, payload,len ); //Copy a block of data from user space memory to kernel memory (to,from,len)
   pushed_msg->size = len;
@@ -178,6 +179,11 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
   me.task = current;
 	me.awake = NO;
 	me.already_hit = NO;
+
+  if ( len > mailslots[MINOR_CURRENT]->curr_size  || len <= 0 ){
+    printk("%s: lms_write error, len to write not compliant with the spec. \n " , MODNAME);
+    return FAILURE;
+  }
 
   //lock the mailslot elem
   spin_lock( &(mailslots[MINOR_CURRENT]->queue_lock) );
@@ -311,7 +317,7 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
     if ( ret != 0 ){
       /*the function will return -ERESTARTSYS if it was interrupted by a signal and 0 if condition evaluated to true.*/
       printk("%s: The process %d has been awaken by a signal\n", MODNAME , current->pid);
-      return FAILURE;  
+      return FAILURE;
     }
 
     //once waked up the reader delete himself from the waitqueue , then the loop is over
@@ -346,6 +352,59 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
 
 
 */
+static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigned long value){
+  //since this function has not to be queued we try to get the lock
+  int status = SUCCESS ;
+  if ( spin_trylock( &(mailslots[MINOR_CURRENT]->queue_lock) )  == 0 ){
+    if ( mailslots[MINOR_CURRENT]->blocking == NON_BLOCKING ){
+      printk("%s: trying to acquire a lock in a mailslot already locked. Error.",MODNAME);
+      return FAILURE;
+    }
+    else {
+      spin_lock(&(mailslots[MINOR_CURRENT]->queue_lock));
+    }
+  }
+  switch (param) {
+
+    case CHANGE_BLOCKING_MODE:
+      if (value == BLOCKING || value == NON_BLOCKING){
+        mailslots[MINOR_CURRENT]->blocking = value;
+        status = SUCCESS;
+      }
+      else {
+        printk("%s: Error, change blocking mode parameter value not found!\n",MODNAME);
+        status = FAILURE;
+      }
+      break ;
+
+    case CHANGE_MESSAGE_SIZE:
+      if ( value <= MAX_MESSAGE_SIZE && value > 0){
+        mailslots[MINOR_CURRENT]->curr_size = value;
+        status = SUCCESS;
+      }
+      else {
+        printk("%s: Error, change slot size parameter value not compliant with the spec (MAX %d) ", MODNAME, MAX_MESSAGE_SIZE );
+        status = FAILURE;
+      }
+      break;
+
+    case GET_SLOT_SIZE:
+      printk("%s: current slot size of entry with minor %d is %d ", MODNAME, MINOR_CURRENT, mailslots[MINOR_CURRENT]->curr_size);
+      break;
+
+    default:
+      printk("%s: command not found", MODNAME);
+      break;
+  }
+  spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+  return status;
+}
+
+/*
+
+
+*/
+
 static struct file_operations fops = {
   .owner= THIS_MODULE,
   .open =  lms_open,
