@@ -1,15 +1,24 @@
 #include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <time.h>
+#include <unistd.h>
+
 
 #define DEBUG 1
 
 void do_work_child(char* path, int len);
 static char *rand_string(size_t len);
+
+void open_close(char* path){
+  int fd = open(path , 00);
+  printf("open done %d \n" ,fd);
+  int ret = close(fd);
+  printf("close done %d\n",ret );
+  int fs = open("Node2" , 00);
+  printf("open 2 done %d \n" ,fs);
+  int res = close(fs);
+  printf("close done %d\n",res );
+
+}
 
 
 void create_n_process(int n , int len , char* file){
@@ -39,7 +48,7 @@ static char *rand_string(size_t len){
     if (len) {
         --len;
         for (size_t n = 0; n < len; n++) {
-            int key = rand(time(NULL)) % (int) (sizeof charset - 1);
+            int key = rand() % (int) (sizeof charset - 1);
             str[n] = charset[key];
         }
         str[len] = '\0';
@@ -80,6 +89,6 @@ void do_work_child(char* path, int len){
 
 int main(int argc, char const *argv[]) {
 
-create_n_process(5, 20 , "aux.txt");
-
+//create_n_process(5, 20 , "aux.txt");
+open_close("Node");
 }

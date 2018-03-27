@@ -1,4 +1,3 @@
-#define EXPORT_SYMTAB
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -10,10 +9,11 @@
 #include <linux/spinlock.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/device.h>
 
-MODULE_AUTHOR("Francesco Segala - francesco.segala10@gmial.com")
-MODULE_LICENSE("GPL")
-MODULE_DESCRIPTION("this project deals with implementing within Linux services similar to those that are offered by Windows mail slots")
+MODULE_AUTHOR("Francesco Segala - francesco.segala10@gmial.com");
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("this project deals with implementing within Linux services similar to those that are offered by Windows mail slots");
 /*spec*/
 /*
 This specification related the implementation of a special device file that is accessible according to FIFO style semantic
@@ -36,7 +36,6 @@ the range of device file minor numbers supported by the driver (it could be the 
 #define DEVICE_NAME "mail_slot"
 
 //module tunable parameters and const
-#define MINOR_CURRENT MINOR(filp->f_dentry->d_inode->i_rdev);
 #define MAX_MINOR_NUM 255
 #define MAX_MESSAGE_SIZE 512
 #define INIT_MESSAGE_SIZE 256
@@ -65,14 +64,14 @@ the range of device file minor numbers supported by the driver (it could be the 
 typedef struct Message{
   char* payload;
   size_t size;
-  message* next;
+  struct Message* next;
 } message;
 
 
 //list elem , this entry of the list represent a process waiting on that WQ
 typedef struct List_Elem{
-  list_elem* prev;
-  list_elem* next;
+  struct List_Elem* prev;
+  struct List_Elem* next;
   struct task_struct *task;	//pointer to the thread PCB that inserted this process in the WQ
   int awake;
   int already_hit;
@@ -82,7 +81,7 @@ typedef struct List_Elem{
 //wrapper for list elem collections
 typedef struct List{
   list_elem* head;
-  list_elem* queue;
+  list_elem* tail;
 }list;
 
 //mailslot element
@@ -99,7 +98,6 @@ typedef struct Slot_elem{
 
 //
 static int major_number = 0;
-
 //the mailslots list
 static slot_elem* mailslots[MAX_MINOR_NUM];
 
@@ -107,42 +105,41 @@ static slot_elem* mailslots[MAX_MINOR_NUM];
 static int lms_open(struct inode *inode , struct file *file);
 static int lms_release(struct inode *inode, struct file *file);
 static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t *off);
-static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off);
-static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigned long value);
+static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off);
+static long lms_ioctl( struct file *, unsigned int , unsigned long );
 static ssize_t push_message(slot_elem* elem, char* payload, ssize_t len);
-static ssize_t pop_message(slot_elem* elem, char* out_buff);
+static void pop_message(slot_elem* elem, char* out_buff);
 
 
 
 
 static int lms_open(struct inode *inode, struct file *file){
-
+  const int MINOR_CURRENT = iminor(inode);
   if (MINOR_CURRENT<0 || MINOR_CURRENT > MAX_MINOR_NUM ){
     printk("Cannot open the device, minor number not allowed");
     return MSOPEN_ERROR;
   }
 
-  printk("Device opened and new LMS instance created with minor %d\n", MINOR_CURRENT);
-  try_module_get(THIS_MODULE);
-  return 0;
+  printk(KERN_INFO "Device opened and new LMS instance created with minor %d\n", MINOR_CURRENT);
+  return SUCCESS;
 }
 
 
-
 static int lms_release(struct inode *inode, struct file *file){
-  printk("Device closing...closed a LMS instance with minor %d",MINOR_CURRENT);
-  module_put(THIS_MODULE);
+  const int MINOR_CURRENT = iminor(inode);
+  printk(KERN_INFO "Device closing...closed a LMS instance with minor %d",MINOR_CURRENT);
   return 0;
 }
 
 
 
 static ssize_t push_message(slot_elem* elem, char* payload, ssize_t len){
-
+  /*
   struct message* pushed_msg = kmalloc(sizeof(struct message), GFP_KERNEL);//memory allocation
 
   if (pushed_msg == NULL){ //error in allocation check
     printk("Error while allocating memory for pushing a new message for the entry %d", MINOR_CURRENT);
+
     return MSPUSH_ERROR;
   }
 
@@ -161,23 +158,26 @@ static ssize_t push_message(slot_elem* elem, char* payload, ssize_t len){
     elem->tail->next = pushed_msg;
     elem->tail = pushed_msg;
   }
+  */
   return SUCCESS;
 }
 
 
 
 static void pop_message(slot_elem* elem, char* out_buff){
+  /*
   copy_to_user(out_buff, elem->head->payload, elem->head->size); //put the message into the buffer (to,from.len)
   message* head_aux = elem->head;
   elem->head = elem->head->next; //pop the readed message
   kfree(head_aux->payload); //release the message head memory
   kfree(head_aux);
+  */
 }
 
 
 
 static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t *off){
-
+  /*
   volatile list_elem me;
   list_elem *aux;
   DECLARE_WAIT_QUEUE_HEAD(the_queue);//here we use a private queue - wakeup is selective via wake_up_process
@@ -206,7 +206,7 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
 
     aux = mailslots[MINOR_CURRENT]->w_queue->tail;
     /*check on the regularity of the queue*/
-
+    /*
     if(aux->prev == NULL){
         spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
         printk("%s: malformed list error in the mailslot\n",MODNAME);
@@ -232,6 +232,7 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
     int ret = wait_event_interruptible(the_queue, mailslots[MINOR_CURRENT]->free_mem >= len);
     if ( ret != 0 ){
       /*the function will return -ERESTARTSYS if it was interrupted by a signal and 0 if condition evaluated to true.*/
+      /*
       printk("%s: The process %d has been awaken by a signal\n", MODNAME , current->pid);
       return FAILURE;
     }
@@ -267,13 +268,14 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
   }
   //then release the lock and return the number of byte written
   spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+  */
   return len;
 }
 
 
 
-static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t *off){
-
+static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
+  /*
   volatile list_elem me;
   list_elem *aux;
   DECLARE_WAIT_QUEUE_HEAD(the_queue);//here we use a private queue - wakeup is selective via wake_up_process
@@ -331,6 +333,7 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
 
     if ( ret != 0 ){
       /*the function will return -ERESTARTSYS if it was interrupted by a signal and 0 if condition evaluated to true.*/
+      /*
       printk("%s: The process %d has been awaken by a signal\n", MODNAME , current->pid);
       return FAILURE;
     }
@@ -365,15 +368,16 @@ static ssize_t lms_read(struct file *filp, const char *buff, size_t len, loff_t 
     }
     aux = aux->next;
   }
-  spin_unlock( &(mailslots[MINOR_CURRENT])->queue_lock );
+  spin_unlock( &(mailslots[MINOR_CURRENT])->queue_lock );*/
   return len;
 }
 
 
 
-static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigned long value){
+static long lms_ioctl( struct file * f, unsigned int param, unsigned long value){
   //since this function has not to be queued we try to get the lock and if is busy we quit otherwise we lock the mailslot
-  int status = SUCCESS ;
+
+  int status = SUCCESS ;/*
   //TODO need a description
   if ( spin_trylock( &(mailslots[MINOR_CURRENT]->queue_lock) )  == 0 ){
     if ( mailslots[MINOR_CURRENT]->blocking == NON_BLOCKING ){
@@ -416,38 +420,43 @@ static long lms_ioctl(struct inode *, struct file *, unsigned int param, unsigne
       printk("%s: command not found", MODNAME);
       break;
   }
-  spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
+  spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );*/
   return status;
 }
 
 
 
 static struct file_operations fops = {
-  .owner= THIS_MODULE,
+  .owner = THIS_MODULE,
   .open =  lms_open,
   .write = lms_write,
   .read = lms_read,
-  .unlocked_ioctl= lms_ioctl,
-  .release= lms_release
+  .unlocked_ioctl = lms_ioctl,
+  .release = lms_release
 };
 
 int init_module(void) {
   //register the chardevice and store the result in major_number
+  int i ;
   major_number = register_chrdev(0, DEVICE_NAME, &fops);
   if ( major_number < 0 ){
     printk("%s: cannot register a chardevice , failed ", MODNAME);
     return major_number;
   }
   //then initialize the all data structures
-  int i ;
   for (i = 0 ; i < MAX_MINOR_NUM ; i++){
-    mailslots[i]->w_queue = {NULL,NULL};
-    mailslots[i]->r_queue = {NULL,NULL};
+    mailslots[i] = kmalloc( sizeof( slot_elem ) , GFP_KERNEL);
+    mailslots[i]->w_queue = kmalloc(sizeof(list) , GFP_KERNEL );
+    mailslots[i]->r_queue = kmalloc(sizeof(list) , GFP_KERNEL );
+    mailslots[i]->w_queue->head = NULL;
+    mailslots[i]->w_queue->tail = NULL;
+    mailslots[i]->r_queue->head = NULL;
+    mailslots[i]->r_queue->tail = NULL;
     mailslots[i]->head = NULL;
     mailslots[i]->tail = NULL;
     mailslots[i]->free_mem = INIT_MESSAGE_SIZE*MAX_SLOT_SIZE; //so there are at most MAX_SLOT_SIZE slot for each specific mailslot
     mailslots[i]->curr_size = INIT_MESSAGE_SIZE;
-    mailslots[i]->blocking = BLOCKING_MODE;
+    mailslots[i]->blocking = BLOCKING;
     spin_lock_init( &(mailslots[i]->queue_lock) );
   }
   printk( "%s: Device registered, it is assigned major number %d\n", MODNAME, major_number);
@@ -455,12 +464,12 @@ int init_module(void) {
 }
 
 void cleanup_module(void){
-
+  //TODO cleanup memory usage
+  int i;
   if ( major_number <= 0 ){
   		printk( "%s: No device registered!\n", MODNAME);
-  		return FAILURE;
+  		return;
   }
-  int i;
   for (i = 0 ; i < MAX_MINOR_NUM ; i++){
     message* iterate = mailslots[i]->head;
     message* aux;
@@ -472,7 +481,7 @@ void cleanup_module(void){
     }
   }
 
-  unregister_chrdev(Major, DEVICE_NAME);
+  unregister_chrdev(major_number, DEVICE_NAME);
   printk( "%s:Device unregistered!\n", MODNAME);
   return;
 }
