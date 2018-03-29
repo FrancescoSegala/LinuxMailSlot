@@ -1,3 +1,7 @@
+#
+# Makefile for LinuxMailSlots module
+#
+
 obj-m += LinuxMailSlots.o
 
 all:
@@ -6,23 +10,28 @@ all:
 
 mount:
 	sudo insmod LinuxMailSlots.ko
+
+node:
 	sudo mknod Node c 244 0
+
+rmnode:
+	sudo rm -f Node
 
 unmount:
 	sudo rmmod LinuxMailSlots.ko
 	sudo rm -f Node
 
 testnode:
-	sudo mknod /dev/testNode c 250 0
-	sudo chmod 777 Node
+	sudo mknod testNode c 244 0
+	sudo chmod 777 testNode
 
 remtestnode:
-	sudo rm -f Node
+	sudo rm -f testNode
 
-testwrite:
+write:
 	echo -n test > Node
 
-testread:
+read:
 	cat Node
 
 clean:

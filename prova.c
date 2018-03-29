@@ -1,9 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <string.h>
 
 
-#define DEBUG 1
+#define DEBUG if( 1 )
 
 void do_work_child(char* path, int len);
 static char *rand_string(size_t len);
@@ -57,30 +62,31 @@ static char *rand_string(size_t len){
 }
 
 void do_work_child(char* path, int len){
-  FILE* fp;
+  int fp;
   char* buff;
-  if (DEBUG) printf("in child process with pid %d, mode = %d : %s\n",getpid(),getpid()%2, getpid()%2?"read":"write" );
+  DEBUG printf("in child process with pid %d, mode = %d : %s\n",getpid(),getpid()%2, getpid()%2?"read":"write" );
   //len should be the len of the mailslot
   int mode = getpid()%2; //binary random value dependent to the pid of the process
   if ( mode ){ //mode 1 is reading
     buff = malloc(len*sizeof(char));
-    fp = fopen(path, "r");
+    fp = open(path, 00);
     if ( fp ){
       memset( buff , 0 , len );
-      buff = fgets( buff, len, fp);
-      if ( buff == NULL ) printf("void buffer , cannot read\n");
-      printf("process PID %d tried a read : result %s of len %d\n", getpid() , buff , strlen(buff));
-      fclose(fp);
+      int ret = read( fp, buff, len);
+      if ( ret == -1 ) printf("process %d cannot read\n", getpid());
+      DEBUG printf("process PID %d tried a read : result %s of len %d\n", getpid() , buff , strlen(buff));
+      close(fp);
     }
   }
   else{
-    fp = fopen(path, "w");
+    fp = open(path, 00);
     if ( fp ){
       memset(buff , 0 , len );
       buff = rand_string(len);
-      int ret = fprintf(fp, buff );
-      printf("process PID %d tried a write : result %d\n",getpid() , ret );
-      fclose(fp);
+      int ret = write(fp, buff ,len);
+      if ( ret != len ) printf("error in writing process %d \n",getpid() );
+      DEBUG printf("process PID %d tried a write : result %d\n",getpid() , ret );
+      close(fp);
     }
   }
 }
@@ -90,5 +96,19 @@ void do_work_child(char* path, int len){
 int main(int argc, char const *argv[]) {
 
 //create_n_process(5, 20 , "aux.txt");
-open_close("Node");
+//open_close("Node");
+char* buff;
+  int ret = open("testNode", 00);
+  if ( ret ){
+    buff = malloc(256*sizeof(char));
+    memset( buff , 0 , 256 );
+    int w = write(ret, "aaaa", 4 );
+    if (w != 4) {
+      printf("NO %d\n" , w);
+      return -1;
+    }
+    int res = read( ret, buff, 4);
+    printf("%s\n",buff );
+  }
+  return 0;
 }
