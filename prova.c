@@ -102,12 +102,12 @@ char* buff;
   if ( ret ){
     buff = malloc(256*sizeof(char));
     memset( buff , 0 , 256 );
-    int w = write(ret, "aaaa", 4 );
-    if (w != 4) {
-      printf("NO %d\n" , w);
-      return -1;
-    }
-    int res = read( ret, buff, 4);
+    //int w = write(ret, "aaaa", 4 );
+    //if (w != 4) {
+      //printf("NO %d\n" , w);
+      //return -1;
+    //}
+    int res = read( ret, buff,  atoi(argv[1]) );
     printf("%s\n",buff );
   }
   return 0;

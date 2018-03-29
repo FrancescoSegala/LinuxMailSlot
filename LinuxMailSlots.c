@@ -274,10 +274,10 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
   aux = mailslots[MINOR_CURRENT]->r_queue->head;
   if ( aux == NULL ){
     spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
-    if(DEBUG) printk( KERN_INFO "%s: write done, written %ld bytes ",MODNAME, len);
+    if(DEBUG) printk( KERN_INFO "%s: write done, written %ld bytes no processes waiting for read ",MODNAME, len);
     return len;
   }
-  while ( aux->next != NULL ){
+  while ( aux != NULL ){
     if ( aux->already_hit == NO ){
       aux->already_hit = YES ;
       aux->awake = YES ;
@@ -336,7 +336,6 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
       spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
       return FAILURE;
     }
-    if (DEBUG) printk(KERN_INFO"%s checkpoint 1  \n",MODNAME );
     //the reader process has to put himself in the reader queue
     aux = mailslots[MINOR_CURRENT]->r_queue->head;
     // if the queue is empty initialize a new queue : head and tail
@@ -347,7 +346,8 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
     else {
       aux = mailslots[MINOR_CURRENT]->r_queue->tail;
       //otherwise put it on the tail and update
-      if ( aux->prev == NULL ){
+      if ( aux->prev == NULL && aux != mailslots[MINOR_CURRENT]->r_queue->head ){
+        //if there is just one process in the queue i can have aux->prev == NULL
         spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
         printk(KERN_INFO"%s: malformed read queue, aborted", MODNAME);
         return FAILURE;
@@ -370,8 +370,8 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
     //once waked up the reader delete himself from the waitqueue , then the loop is over
     //and the process can pop a message from the queue in CS
     spin_lock( &(mailslots[MINOR_CURRENT])->queue_lock );
-    me.prev->next = me.next;
-    me.next->prev = me.prev;
+    if ( me.prev != NULL ) me.prev->next = me.next;
+    if ( me.next != NULL ) me.next->prev = me.prev;
   }
 
   //check again the len to read after the lock releasing because can be changed
