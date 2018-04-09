@@ -296,6 +296,8 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
 
 static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
 
+
+
   list_elem me;
   list_elem *aux;
   const int MINOR_CURRENT = iminor(filp->f_path.dentry->d_inode);
@@ -307,6 +309,9 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
 	me.awake = NO;
 	me.already_hit = NO;
   //check on len : has to be equal to the size of the message
+  if (*off < 0) return FAILURE;
+
+
   if ( len <= 0  ){
     printk(KERN_INFO"%s: called a read with negative buffer len \n",MODNAME);
     return FAILURE;

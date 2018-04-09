@@ -12,7 +12,7 @@ mount:
 	sudo insmod LinuxMailSlots.ko
 
 node:
-	sudo mknod Node c 244 0
+	sudo mknod Node c 245 0
 
 rmnode:
 	sudo rm -f Node
@@ -22,7 +22,7 @@ unmount:
 	sudo rm -f Node
 
 testnode:
-	sudo mknod testNode c 244 0
+	sudo mknod testNode c 245 0
 	sudo chmod 777 testNode
 
 remtestnode:
