@@ -133,7 +133,6 @@ static int lms_release(struct inode *inode, struct file *file){
 }
 
 
-
 static ssize_t push_message(slot_elem* elem,const char* payload, ssize_t len, struct file * filp){
 
   const int MINOR_CURRENT = iminor(filp->f_path.dentry->d_inode);
@@ -163,7 +162,6 @@ static ssize_t push_message(slot_elem* elem,const char* payload, ssize_t len, st
   printk(KERN_INFO"%s: message pushed ",MODNAME);
   return SUCCESS;
 }
-
 
 
 static void pop_message(slot_elem* elem, char* out_buff){
@@ -209,11 +207,7 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
       spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
       return NOT_ENOUGH_SPACE_ERROR;
     }
-    /*
-    //the reader process has to put himself in the reader queue
-    aux = mailslots[MINOR_CURRENT]->r_queue->head;
 
-    */
     aux = mailslots[MINOR_CURRENT]->w_queue->head;
     // if the queue is empty initialize a new queue : head and tail
     if ( aux == NULL ){
@@ -313,9 +307,9 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
 	me.awake = NO;
 	me.already_hit = NO;
   //check on len : has to be equal to the size of the message
-  if (*off < 0) {
-    if ( DEBUG ) printk(KERN_INFO "%s: offset less than zero in lms_read, FAILURE",MODNAME);
-    return FAILURE;
+  if (*off > 0) {
+    if ( DEBUG ) printk(KERN_INFO "%s: offset less than zero in lms_read off: %Ld, FAILURE",MODNAME, *off);
+    return 0;
   }
 
   if ( len <= 0  ){
@@ -323,7 +317,7 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
     return FAILURE;
   }
   else if (mailslots[MINOR_CURRENT]->head == NULL){
-    if (DEBUG) printk(KERN_INFO "%s:no message in the mailslot, len assigned to default \n", MODNAME );
+    if (DEBUG) printk(KERN_INFO "%s: No message in the mailslot, len assigned to default \n", MODNAME );
     len = INIT_MESSAGE_SIZE;
   }
   else if (len < mailslots[MINOR_CURRENT]->head->size  ){
@@ -416,6 +410,7 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
   }
   spin_unlock( &(mailslots[MINOR_CURRENT])->queue_lock );
   if (DEBUG) printk(KERN_INFO "%s: read performed, read %ld bytes\n",MODNAME, len);
+  *off = len ;
   return len;
 }
 
