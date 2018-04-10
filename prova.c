@@ -9,16 +9,18 @@
 
 
 #define DEBUG if( 1 )
+#define READ  1
+#define WRITE  0
 
-void do_work_child(char* path, int len);
+void do_work_child(char* path, int len, int mode);
 static char *rand_string(size_t len);
 
 void open_close(char* path){
-  int fd = open(path , 00);
+  int fd = open(path , O_RDWR);
   printf("open done %d \n" ,fd);
   int ret = close(fd);
   printf("close done %d\n",ret );
-  int fs = open("Node2" , 00);
+  int fs = open("Node2" , O_RDWR);
   printf("open 2 done %d \n" ,fs);
   int res = close(fs);
   printf("close done %d\n",res );
@@ -35,7 +37,7 @@ void create_n_process(int n , int len , char* file){
       return;
     } else if (pids[i] == 0) {
       //Do Work In Child
-      do_work_child(file,len);
+      do_work_child(file,len, getpid()%2);
       exit(0);
     }
   }
@@ -61,33 +63,34 @@ static char *rand_string(size_t len){
     return str;
 }
 
-void do_work_child(char* path, int len){
+void do_work_child(char* path, int len , int mode ){
   int fp;
-  char* buff;
+  char* buff = malloc(len*sizeof(char));
   DEBUG printf("in child process with pid %d, mode = %d : %s\n",getpid(),getpid()%2, getpid()%2?"read":"write" );
   //len should be the len of the mailslot
-  int mode = getpid()%2; //binary random value dependent to the pid of the process
   if ( mode ){ //mode 1 is reading
-    buff = malloc(len*sizeof(char));
-    fp = open(path, 00);
+    fp = open(path, O_RDWR);
     if ( fp ){
       memset( buff , 0 , len );
       int ret = read( fp, buff, len);
       if ( ret == -1 ) printf("process %d cannot read\n", getpid());
-      DEBUG printf("process PID %d tried a read : result %s of len %d\n", getpid() , buff , strlen(buff));
+      DEBUG printf("process PID %d tried a read : result of len %ld\n", getpid() , strlen(buff));
+      printf("%s\n",buff );
       close(fp);
     }
   }
   else{
-    fp = open(path, 00);
+    DEBUG printf("[write mode]\n" );
+    fp = open(path, O_RDWR);
     if ( fp ){
       memset(buff , 0 , len );
       buff = rand_string(len);
       int ret = write(fp, buff ,len);
-      if ( ret != len ) printf("error in writing process %d \n",getpid() );
+      if ( ret != len ) printf("error in writing process %d\n",getpid() );
       DEBUG printf("process PID %d tried a write : result %d\n",getpid() , ret );
       close(fp);
     }
+    else printf("cannot open file %s\n",path  );
   }
 }
 
@@ -96,19 +99,8 @@ void do_work_child(char* path, int len){
 int main(int argc, char const *argv[]) {
 
 //create_n_process(5, 20 , "aux.txt");
-//open_close("Node");
-char* buff;
-  int ret = open("testNode", 00);
-  if ( ret ){
-    buff = malloc(256*sizeof(char));
-    memset( buff , 0 , 256 );
-    //int w = write(ret, "aaaa", 4 );
-    //if (w != 4) {
-      //printf("NO %d\n" , w);
-      //return -1;
-    //}
-    int res = read( ret, buff,  atoi(argv[1]) );
-    printf("%s\n",buff );
-  }
+  do_work_child("testNode", 256 , WRITE);
+  do_work_child("testNode", 256 , READ);
+
   return 0;
 }

@@ -223,7 +223,7 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
     else {
       aux = mailslots[MINOR_CURRENT]->w_queue->tail;
       //otherwise put it on the tail and update
-      if ( aux->prev == NULL ){
+      if (  aux != NULL && aux->prev == NULL ){
         spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
         printk(KERN_INFO"%s: malformed write queue, aborted", MODNAME);
         return FAILURE;
@@ -240,7 +240,7 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
     ret = wait_event_interruptible(the_queue, mailslots[MINOR_CURRENT]->free_mem >= len);
     if ( ret != 0 ){
       /*the function will return -ERESTARTSYS if it was interrupted by a signal and 0 if condition evaluated to true.*/
-      printk(KERN_INFO"%s: The process %d has been awaken by a signal\n", MODNAME , current->pid);
+      printk(KERN_INFO"%s: The process [writer] %d has been awaken by a signal\n", MODNAME , current->pid);
       return FAILURE;
     }
 
@@ -273,18 +273,20 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
   if ( DEBUG ) printk( KERN_INFO "%s: awaking a reader process that is waiting \n" ,MODNAME);
   aux = mailslots[MINOR_CURRENT]->r_queue->head;
   if ( aux == NULL ){
+    if (DEBUG) printk(KERN_INFO "%s: raw 276 aux is null [writer] \n" ,MODNAME);
     spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
     if(DEBUG) printk( KERN_INFO "%s: write done, written %ld bytes no processes waiting for read ",MODNAME, len);
     return len;
   }
+  if (DEBUG) printk(KERN_INFO "%s: raw 281 aux is not null \n" ,MODNAME);
   while ( aux != NULL ){
     if ( aux->already_hit == NO ){
       aux->already_hit = YES ;
       aux->awake = YES ;
       wake_up_process(aux->task);
       break;
-    aux= aux->next;
     }
+    aux= aux->next;
   }
   //then release the lock and return the number of byte written
   spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
@@ -294,9 +296,11 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
 
 
 
+
+
+
+
 static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
-
-
 
   list_elem me;
   list_elem *aux;
@@ -309,8 +313,10 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
 	me.awake = NO;
 	me.already_hit = NO;
   //check on len : has to be equal to the size of the message
-  if (*off < 0) return FAILURE;
-
+  if (*off < 0) {
+    if ( DEBUG ) printk(KERN_INFO "%s: offset less than zero in lms_read, FAILURE",MODNAME);
+    return FAILURE;
+  }
 
   if ( len <= 0  ){
     printk(KERN_INFO"%s: called a read with negative buffer len \n",MODNAME);
@@ -351,7 +357,8 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
     else {
       aux = mailslots[MINOR_CURRENT]->r_queue->tail;
       //otherwise put it on the tail and update
-      if ( aux->prev == NULL && aux != mailslots[MINOR_CURRENT]->r_queue->head ){
+
+      if ( aux == NULL || (aux->prev == NULL && aux != mailslots[MINOR_CURRENT]->r_queue->head) ){
         //if there is just one process in the queue i can have aux->prev == NULL
         spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
         printk(KERN_INFO"%s: malformed read queue, aborted", MODNAME);
@@ -368,15 +375,20 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
     if ( ret != 0 ){
       /*the function will return -ERESTARTSYS if it was interrupted by a signal and 0 if condition evaluated to true.*/
 
-      printk(KERN_INFO"%s: The process %d has been awaken by a signal\n", MODNAME , current->pid);
+      printk(KERN_INFO"%s: The process [read] %d has been awaken by a signal\n", MODNAME , current->pid);
       return FAILURE;
     }
 
     //once waked up the reader delete himself from the waitqueue , then the loop is over
     //and the process can pop a message from the queue in CS
     spin_lock( &(mailslots[MINOR_CURRENT])->queue_lock );
-    if ( me.prev != NULL ) me.prev->next = me.next;
     if ( me.next != NULL ) me.next->prev = me.prev;
+    if ( me.prev != NULL ) me.prev->next = me.next;
+    if ( me.prev == NULL && me.next == NULL ){
+      mailslots[MINOR_CURRENT]->r_queue->head = NULL;
+      mailslots[MINOR_CURRENT]->r_queue->tail = NULL;
+    }
+
   }
 
   //check again the len to read after the lock releasing because can be changed
