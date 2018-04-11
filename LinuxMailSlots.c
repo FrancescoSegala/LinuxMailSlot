@@ -265,11 +265,7 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
     printk(KERN_INFO"%s: lms_write error, len to write not compliant with the spec. \n " , MODNAME);
     return FAILURE;
   }
-  //TODO number of byte to push is len or curr size?
-  /*
-  in case of curr size you have to add one more check:
-  if ( len < mailslots[MINOR_CURRENT]->curr_size ) len = mailslots[MINOR_CURRENT]->curr_size;
-  */
+
   push_message( mailslots[MINOR_CURRENT], buff , len, filp );
   if ( DEBUG ) printk(KERN_INFO "%s: updating free memory pre is %d\n", MODNAME, mailslots[MINOR_CURRENT]->free_mem );
   mailslots[MINOR_CURRENT]->free_mem -= len;
@@ -278,18 +274,7 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
   //awake a reader process that is waiting
   if ( DEBUG ) printk( KERN_INFO "%s: awaking a reader process that is waiting \n" ,MODNAME);
   aux = mailslots[MINOR_CURRENT]->r_queue->head;
-  /*
-  if (DEBUG) printk(KERN_INFO "%s: raw 281 aux is not null \n" ,MODNAME);
-  while ( aux != NULL ){
-    if ( aux->already_hit == NO ){
-      aux->already_hit = YES ;
-      aux->awake = YES ;
-      wake_up_process(aux->task);
-      break;
-    }
-    aux= aux->next;
-  }
-  */
+
   awake_queue(aux, MINOR_CURRENT) ;
   //then release the lock and return the number of byte written
   spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
@@ -404,17 +389,6 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
   pop_message(mailslots[MINOR_CURRENT], buff);
   //now the reader has to signal to the writers waiting that there is a new slot ready
   //then is his duty to remove himself from the w_queue
-  /*
-  while ( aux != NULL ){
-    if ( aux->already_hit == NO ){
-      aux->awake = YES;
-      aux->already_hit = YES;
-      wake_up_process(aux->task);
-      break;
-    }
-    aux = aux->next;
-  }
-  */
   aux = mailslots[MINOR_CURRENT]->w_queue->head;
   awake_queue(aux, MINOR_CURRENT) ;
   spin_unlock( &(mailslots[MINOR_CURRENT])->queue_lock );
