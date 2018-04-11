@@ -6,6 +6,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <string.h>
+#include <sys/ioctl.h>
+
+
 
 
 #define DEBUG if( 1 )
@@ -28,6 +31,14 @@ void open_close(char* path){
 }
 
 
+void test_ioctl(char* path,int param , int value){
+  int fd = open(path , O_RDWR);
+  if (fd ) {
+
+    int rc = ioctl(fd, param , value);//GET_SLOT_SIZE 111
+  }
+}
+
 void create_n_process(int n , int len , char* file){
   int pids[n];
   int i;
@@ -37,7 +48,7 @@ void create_n_process(int n , int len , char* file){
       return;
     } else if (pids[i] == 0) {
       //Do Work In Child
-      do_work_child(file,len, getpid()%2);
+      do_work_child(file,len,(rand()+ getpid())%2);
       exit(0);
     }
   }
@@ -66,7 +77,7 @@ static char *rand_string(size_t len){
 void do_work_child(char* path, int len , int mode ){
   int fp;
   char* buff = malloc(len*sizeof(char));
-  DEBUG printf("in child process with pid %d, mode = %d : %s\n",getpid(),getpid()%2, getpid()%2?"read":"write" );
+  DEBUG printf("in child process with pid %d, mode = %d : %s\n",getpid(),getpid()%2, getpid()%2?"write":"read" );
   //len should be the len of the mailslot
   if ( mode ){ //mode 1 is reading
     fp = open(path, O_RDWR);
@@ -74,7 +85,7 @@ void do_work_child(char* path, int len , int mode ){
       memset( buff , 0 , len );
       int ret = read( fp, buff, len);
       if ( ret == -1 ) printf("process %d cannot read\n", getpid());
-      DEBUG printf("process PID %d tried a read : result of len %ld\n", getpid() , strlen(buff));
+      DEBUG printf("process PID %d tried a read : result of len %ld\n\n", getpid() , strlen(buff));
       printf("%s\n",buff );
       close(fp);
     }
@@ -86,8 +97,8 @@ void do_work_child(char* path, int len , int mode ){
       memset(buff , 0 , len );
       buff = rand_string(len);
       int ret = write(fp, buff ,len);
-      if ( ret != len ) printf("error in writing process %d\n",getpid() );
-      DEBUG printf("process PID %d tried a write : result %d\n",getpid() , ret );
+      if ( ret != len ) printf("error in writing process %d written %d len %d\n",getpid(),ret,len );
+      DEBUG printf("process PID %d tried a write : result %d\n\n",getpid() , ret );
       close(fp);
     }
     else printf("cannot open file %s\n",path  );
@@ -98,9 +109,9 @@ void do_work_child(char* path, int len , int mode ){
 
 int main(int argc, char const *argv[]) {
 
-//create_n_process(5, 20 , "aux.txt");
-  do_work_child("testNode", 256 , WRITE);
-  do_work_child("testNode", 256 , READ);
-
+  create_n_process(5, 256 ,"testNode" );
+  //do_work_child("testNode", 256 , WRITE);
+  //do_work_child("testNode", 256 , READ);
+  test_ioctl("testNode",111,0);
   return 0;
 }

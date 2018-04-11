@@ -110,8 +110,20 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off);
 static long lms_ioctl( struct file *, unsigned int , unsigned long );
 static ssize_t push_message(slot_elem* elem,const char* payload, ssize_t len, struct file * filp);
 static void pop_message(slot_elem* elem, char* out_buff);
+void awake_queue(list_elem* aux, int minor);
 
 
+void awake_queue(list_elem* aux,int minor){
+  while ( aux != NULL ){
+    if ( aux->already_hit == NO ){
+      aux->already_hit = YES ;
+      aux->awake = YES ;
+      wake_up_process(aux->task);
+      break;
+    }
+    aux= aux->next;
+  }
+}
 
 
 static int lms_open(struct inode *inode, struct file *file){
@@ -266,12 +278,7 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
   //awake a reader process that is waiting
   if ( DEBUG ) printk( KERN_INFO "%s: awaking a reader process that is waiting \n" ,MODNAME);
   aux = mailslots[MINOR_CURRENT]->r_queue->head;
-  if ( aux == NULL ){
-    if (DEBUG) printk(KERN_INFO "%s: raw 276 aux is null [writer] \n" ,MODNAME);
-    spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
-    if(DEBUG) printk( KERN_INFO "%s: write done, written %ld bytes no processes waiting for read ",MODNAME, len);
-    return len;
-  }
+  /*
   if (DEBUG) printk(KERN_INFO "%s: raw 281 aux is not null \n" ,MODNAME);
   while ( aux != NULL ){
     if ( aux->already_hit == NO ){
@@ -282,15 +289,13 @@ static ssize_t lms_write(struct file *filp, const char *buff, size_t len, loff_t
     }
     aux= aux->next;
   }
+  */
+  awake_queue(aux, MINOR_CURRENT) ;
   //then release the lock and return the number of byte written
   spin_unlock( &(mailslots[MINOR_CURRENT]->queue_lock) );
   if(DEBUG) printk( KERN_INFO "%s: write done, written %ld bytes! \n ",MODNAME, len);
   return len;
 }
-
-
-
-
 
 
 
@@ -388,6 +393,7 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
   //check again the len to read after the lock releasing because can be changed
   if ( len < mailslots[MINOR_CURRENT]->head->size  ){
     spin_unlock( &(mailslots[MINOR_CURRENT])->queue_lock );
+    awake_queue( mailslots[MINOR_CURRENT]->r_queue->head, MINOR_CURRENT ) ;
     printk(KERN_INFO "%s: called a read with a len not compliant with the message size, the read hs to be all or nothing ", MODNAME );
     return FAILURE;
   }
@@ -398,7 +404,7 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
   pop_message(mailslots[MINOR_CURRENT], buff);
   //now the reader has to signal to the writers waiting that there is a new slot ready
   //then is his duty to remove himself from the w_queue
-  aux = mailslots[MINOR_CURRENT]->w_queue->head;
+  /*
   while ( aux != NULL ){
     if ( aux->already_hit == NO ){
       aux->awake = YES;
@@ -408,6 +414,9 @@ static ssize_t lms_read(struct file *filp, char *buff, size_t len, loff_t *off){
     }
     aux = aux->next;
   }
+  */
+  aux = mailslots[MINOR_CURRENT]->w_queue->head;
+  awake_queue(aux, MINOR_CURRENT) ;
   spin_unlock( &(mailslots[MINOR_CURRENT])->queue_lock );
   if (DEBUG) printk(KERN_INFO "%s: read performed, read %ld bytes\n",MODNAME, len);
   *off = len ;
